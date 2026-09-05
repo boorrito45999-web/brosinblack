@@ -72,6 +72,8 @@ const POTION_HEAL = 1;
 
 const TILE = 48;
 const VEND_REACH = TILE * 2.5;
+const CAB_REACH = TILE * 2.2;
+const DISGUISE_TIME = 15;
 const HALL_W = 4;
 const WALL = 0;
 const FLOOR = 1;
@@ -83,6 +85,7 @@ const PLANT = 6;
 const VENDING = 7;
 
 const tiles = new Map();
+const cabinetState = new Map();
 const camera = { x: 0, y: 0 };
 
 const linoleumImg = new Image();
@@ -348,6 +351,7 @@ function generateStart() {
   stampDoor(8, y2, 1, 0, -1);
   setTile(-2, 0, VENDING);
   setTile(6, y2 + HALL_W - 1, VENDING);
+  setTile(12, 0, CABINET);
 }
 
 function placeVendingInRoom(ox, oy, w, h, entrance) {
@@ -421,9 +425,46 @@ function drawDesk(x, y) {
   ctx.fill();
 }
 
-function drawCabinet(x, y) {
+function cabinetInfo(tx, ty) {
+  const key = tileKey(tx, ty);
+  if (!cabinetState.has(key)) cabinetState.set(key, { looted: false });
+  return cabinetState.get(key);
+}
+
+function drawCabinet(tx, ty, x, y) {
+  const state = cabinetInfo(tx, ty);
+  const occupied = player.hidden && player.hideTx === tx && player.hideTy === ty;
   ctx.fillStyle = "rgba(0,0,0,0.25)";
   ctx.fillRect(x + 8, y + 8, TILE - 12, TILE - 10);
+  if (occupied) {
+    ctx.fillStyle = "#32383c";
+    ctx.fillRect(x + 6, y + 6, TILE - 12, TILE - 12);
+    ctx.strokeStyle = "#1a1c1e";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x + TILE / 2, y + 8);
+    ctx.lineTo(x + TILE / 2, y + TILE - 8);
+    ctx.stroke();
+    ctx.fillStyle = "#c9a227";
+    ctx.fillRect(x + TILE / 2 - 10, y + TILE / 2 - 2, 4, 4);
+    ctx.fillRect(x + TILE / 2 + 6, y + TILE / 2 - 2, 4, 4);
+    ctx.fillStyle = "#f5c518";
+    ctx.beginPath();
+    ctx.arc(x + TILE / 2 + 8, y + 16, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  if (state.looted) {
+    ctx.fillStyle = "#1a1410";
+    ctx.fillRect(x + 12, y + 8, TILE - 24, TILE - 16);
+    ctx.fillStyle = "#6a7278";
+    ctx.fillRect(x + 2, y + 6, 10, TILE - 12);
+    ctx.fillRect(x + TILE - 12, y + 6, 10, TILE - 12);
+    ctx.fillStyle = "#c9a227";
+    ctx.fillRect(x + 4, y + TILE / 2 - 2, 3, 4);
+    ctx.fillRect(x + TILE - 8, y + TILE / 2 - 2, 3, 4);
+    return;
+  }
   ctx.fillStyle = "#5c6368";
   ctx.fillRect(x + 6, y + 6, TILE - 12, TILE - 12);
   ctx.strokeStyle = "#2f3438";
@@ -535,11 +576,21 @@ function drawGround() {
         }
         drawDesk(x, y);
       } else if (kind === CABINET) {
-        if (!fillWorldPattern(carpetPat, x, y, TILE, TILE)) {
+        const hall =
+          getTile(tx - 1, ty) === FLOOR ||
+          getTile(tx + 1, ty) === FLOOR ||
+          getTile(tx, ty - 1) === FLOOR ||
+          getTile(tx, ty + 1) === FLOOR;
+        if (hall) {
+          if (!fillWorldPattern(linoleumPat, x, y, TILE, TILE)) {
+            ctx.fillStyle = "#d4c7a1";
+            ctx.fillRect(x, y, TILE, TILE);
+          }
+        } else if (!fillWorldPattern(carpetPat, x, y, TILE, TILE)) {
           ctx.fillStyle = "#6a5a4a";
           ctx.fillRect(x, y, TILE, TILE);
         }
-        drawCabinet(x, y);
+        drawCabinet(tx, ty, x, y);
       } else if (kind === PLANT) {
         if (!fillWorldPattern(carpetPat, x, y, TILE, TILE)) {
           ctx.fillStyle = "#6a5a4a";
@@ -594,6 +645,11 @@ const player = {
   dash: false,
   dashing: 0,
   dashCooldown: 0,
+  hidden: false,
+  hideTx: null,
+  hideTy: null,
+  disguise: false,
+  disguiseTime: 0,
 };
 
 const bullets = [];
@@ -658,15 +714,23 @@ window.addEventListener("keydown", (event) => {
     keys.space = true;
   }
   if (!dead && !event.repeat && (event.key.toLowerCase() === "e" || event.code === "KeyE")) {
-    if (nearVending()) buyPotion();
+    if (player.hidden) {
+      // stay stuffed in the closet
+    } else if (nearVending()) buyPotion();
     else player.shield = !player.shield;
   }
   if (!dead && !event.repeat && (event.key.toLowerCase() === "f" || event.code === "KeyF")) {
     event.preventDefault();
-    buyPotion();
+    if (!player.hidden) buyPotion();
   }
   if (!dead && !event.repeat && (event.key.toLowerCase() === "q" || event.code === "KeyQ")) {
-    drinkPotion();
+    if (!player.hidden) drinkPotion();
+  }
+  if (!dead && !event.repeat && (event.key.toLowerCase() === "z" || event.code === "KeyZ")) {
+    lootCabinet();
+  }
+  if (!dead && !event.repeat && (event.key.toLowerCase() === "x" || event.code === "KeyX")) {
+    toggleHide();
   }
   if (event.key === "Shift") keys.shift = true;
   if (!dead && !event.repeat) {
@@ -711,7 +775,12 @@ function gunTip() {
 }
 
 function shoot() {
-  if (dead || player.stun > 0 || fireCooldown > 0) return;
+  if (dead || player.hidden || player.stun > 0 || fireCooldown > 0) return;
+  if (player.disguise) {
+    player.disguise = false;
+    player.disguiseTime = 0;
+    say("COVER BLOWN");
+  }
   const aimLen = Math.hypot(player.facingX, player.facingY);
   if (aimLen < 0.01) return;
   if (player.shield) player.shield = false;
@@ -860,6 +929,78 @@ function drinkPotion() {
   player.potions -= 1;
   player.hp = Math.min(PLAYER_MAX_HP, player.hp + POTION_HEAL);
   say("GLUG  +" + POTION_HEAL + " HP");
+}
+
+function unnoticed() {
+  return player.hidden || player.disguise;
+}
+
+function nearCabinetTile() {
+  const { tx, ty } = worldToTile(player.x, player.y);
+  let best = null;
+  let bestD = Infinity;
+  for (let dy = -3; dy <= 3; dy++) {
+    for (let dx = -3; dx <= 3; dx++) {
+      if (getTile(tx + dx, ty + dy) !== CABINET) continue;
+      const cx = (tx + dx) * TILE + TILE / 2;
+      const cy = (ty + dy) * TILE + TILE / 2;
+      const d = dist(player.x, player.y, cx, cy);
+      if (d <= CAB_REACH && d < bestD) {
+        bestD = d;
+        best = { tx: tx + dx, ty: ty + dy };
+      }
+    }
+  }
+  return best;
+}
+
+function lootCabinet() {
+  if (player.hidden) {
+    say("GET OUT FIRST (X)");
+    return;
+  }
+  const cab = nearCabinetTile();
+  if (!cab) {
+    say("GET CLOSER TO A CLOSET");
+    return;
+  }
+  const state = cabinetInfo(cab.tx, cab.ty);
+  if (state.looted) {
+    say("ALREADY LOOTED");
+    return;
+  }
+  state.looted = true;
+  if (Math.random() < 0.5) {
+    const n = 2 + Math.floor(Math.random() * 3);
+    player.coins += n;
+    say("LOOT +" + n + " COINS");
+  } else {
+    player.disguise = true;
+    player.disguiseTime = DISGUISE_TIME;
+    say("DISGUISE ON  (don't shoot)");
+  }
+}
+
+function toggleHide() {
+  if (player.hidden) {
+    player.hidden = false;
+    player.hideTx = null;
+    player.hideTy = null;
+    say("LEFT THE CLOSET");
+    return;
+  }
+  const cab = nearCabinetTile();
+  if (!cab) {
+    say("GET CLOSER TO A CLOSET");
+    return;
+  }
+  player.hidden = true;
+  player.hideTx = cab.tx;
+  player.hideTy = cab.ty;
+  player.moving = false;
+  player.shield = false;
+  player.dashing = 0;
+  say("HIDING  (X to leave)");
 }
 
 function drawBark(enemy) {
@@ -1041,7 +1182,12 @@ function drawEnemy(enemy) {
 }
 
 function drawPlayer() {
-  const sheet = player.shield
+  if (player.hidden) return;
+  const sheet = player.disguise
+    ? player.moving
+      ? enemyWalkSheet
+      : enemyIdleSheet
+    : player.shield
     ? player.moving
       ? shieldWalkSheet
       : shieldIdleSheet
@@ -1108,8 +1254,18 @@ function update(dt) {
     player.spreadTime -= dt;
     if (player.spreadTime <= 0) player.spread = false;
   }
+  if (player.disguise && !player.hidden) {
+    player.disguiseTime -= dt;
+    if (player.disguiseTime <= 0) {
+      player.disguise = false;
+      say("DISGUISE WORE OFF");
+    }
+  }
 
-  if (
+  if (player.hidden) {
+    player.moving = false;
+    player.dashing = 0;
+  } else if (
     player.dash &&
     keys.shift &&
     player.dashCooldown <= 0 &&
@@ -1120,47 +1276,49 @@ function update(dt) {
     player.dashCooldown = DASH_COOLDOWN + DASH_TIME;
   }
 
-  if (player.stun <= 0 && keys.space) shoot();
+  if (!player.hidden) {
+    if (player.stun <= 0 && keys.space) shoot();
 
-  let dx = 0;
-  let dy = 0;
-  if (player.stun <= 0) {
-    if (keys["w"]) dy -= 1;
-    if (keys["s"]) dy += 1;
-    if (keys["a"]) dx -= 1;
-    if (keys["d"]) dx += 1;
-  }
+    let dx = 0;
+    let dy = 0;
+    if (player.stun <= 0) {
+      if (keys["w"]) dy -= 1;
+      if (keys["s"]) dy += 1;
+      if (keys["a"]) dx -= 1;
+      if (keys["d"]) dx += 1;
+    }
 
-  const length = Math.hypot(dx, dy);
-  const moving = length > 0;
-  if (moving !== wasMoving) animTime = 0;
-  wasMoving = moving;
-  player.moving = moving;
-  animTime += dt;
+    const length = Math.hypot(dx, dy);
+    const moving = length > 0;
+    if (moving !== wasMoving) animTime = 0;
+    wasMoving = moving;
+    player.moving = moving;
+    animTime += dt;
 
-  if (moving) {
-    dx /= length;
-    dy /= length;
-    player.facingX = dx;
-    player.facingY = dy;
+    if (moving) {
+      dx /= length;
+      dy /= length;
+      player.facingX = dx;
+      player.facingY = dy;
+    }
+    let speed = PLAYER_SPEED;
+    if (player.dashing > 0) {
+      player.moving = true;
+      speed = DASH_SPEED;
+      dx = player.facingX;
+      dy = player.facingY;
+      const dashLen = Math.hypot(dx, dy) || 1;
+      dx /= dashLen;
+      dy /= dashLen;
+    }
+    if (dx !== 0 || dy !== 0) {
+      const nextX = player.x + dx * speed * dt;
+      const nextY = player.y + dy * speed * dt;
+      if (!blockedAt(nextX, player.y)) player.x = nextX;
+      if (!blockedAt(player.x, nextY)) player.y = nextY;
+    }
+    maybeGenerate();
   }
-  let speed = PLAYER_SPEED;
-  if (player.dashing > 0) {
-    player.moving = true;
-    speed = DASH_SPEED;
-    dx = player.facingX;
-    dy = player.facingY;
-    const dashLen = Math.hypot(dx, dy) || 1;
-    dx /= dashLen;
-    dy /= dashLen;
-  }
-  if (dx !== 0 || dy !== 0) {
-    const nextX = player.x + dx * speed * dt;
-    const nextY = player.y + dy * speed * dt;
-    if (!blockedAt(nextX, player.y)) player.x = nextX;
-    if (!blockedAt(player.x, nextY)) player.y = nextY;
-  }
-  maybeGenerate();
   camera.x = player.x - canvas.width / 2;
   camera.y = player.y - canvas.height / 2;
 
@@ -1180,6 +1338,17 @@ function update(dt) {
     if (enemy.fireCooldown > 0) enemy.fireCooldown -= dt;
     if (enemy.crouch > 0) enemy.crouch -= dt;
     if (enemy.barkTime > 0) enemy.barkTime -= dt;
+
+    if (unnoticed()) {
+      enemy.moving = false;
+      enemy.crouch = 0;
+      if (enemy.wasMoving) {
+        bark(enemy, "WHERE'D HE GO?");
+        enemy.animTime = 0;
+      }
+      enemy.wasMoving = false;
+      continue;
+    }
 
     const toX = player.x - enemy.x;
     const toY = player.y - enemy.y;
@@ -1252,6 +1421,8 @@ function update(dt) {
         }
       }
       if (hit) bullets.splice(i, 1);
+    } else if (player.hidden) {
+      // stuffed in a closet. bullets pass.
     } else if (shieldBlocks(bullet)) {
       bullets.splice(i, 1);
     } else if (dist(bullet.x, bullet.y, player.x, player.y) < HIT_RADIUS) {
@@ -1299,8 +1470,8 @@ function draw() {
   const gunName = player.weapon === "ak" ? "AK-47" : "PISTOL";
   ctx.fillText(
     player.shield
-      ? "WASD  |  SPACE  |  1 AK  2 pistol  |  E shield (UP)  |  F vend  Q drink  |  " + gunName
-      : "WASD  |  SPACE  |  1 AK  2 pistol  |  E shield  |  F vend  Q drink  |  " + gunName,
+      ? "WASD  |  SPACE  |  1/2 gun  |  E shield (UP)  |  Z loot  X hide  |  " + gunName
+      : "WASD  |  SPACE  |  1/2 gun  |  E shield  |  Z loot  X hide  |  " + gunName,
     16,
     28
   );
@@ -1309,6 +1480,8 @@ function draw() {
   if (player.damageMul > 1) buffs.push("x100");
   if (player.spread) buffs.push("SPREAD");
   if (player.dash) buffs.push(player.dashing > 0 ? "DASH!" : "DASH ready (SHIFT)");
+  if (player.disguise) buffs.push("DISGUISE " + Math.ceil(player.disguiseTime));
+  if (player.hidden) buffs.push("HIDDEN");
   ctx.fillText(
     "YOU " +
       player.hp +
@@ -1323,13 +1496,32 @@ function draw() {
     50
   );
 
-  if (nearVending() && !dead) {
+  let hintY = 72;
+  if (!dead && player.hidden) {
     ctx.fillStyle = "#F5C518";
-    ctx.fillText("E or F  buy healing potion  (" + VEND_COST + " coins)", 16, 72);
+    ctx.fillText("HIDING  |  X to leave", 16, hintY);
+    hintY += 22;
+  } else if (!dead) {
+    if (nearVending()) {
+      ctx.fillStyle = "#F5C518";
+      ctx.fillText("E or F  buy healing potion  (" + VEND_COST + " coins)", 16, hintY);
+      hintY += 22;
+    }
+    const cab = nearCabinetTile();
+    if (cab) {
+      const st = cabinetInfo(cab.tx, cab.ty);
+      ctx.fillStyle = "#c9d4dc";
+      ctx.fillText(
+        st.looted ? "X  hide in closet" : "Z  loot closet    X  hide",
+        16,
+        hintY
+      );
+      hintY += 22;
+    }
   }
   if (toast) {
     ctx.fillStyle = "#ffffff";
-    ctx.fillText(toast, 16, nearVending() && !dead ? 94 : 72);
+    ctx.fillText(toast, 16, hintY);
   }
 
   if (dead) {
