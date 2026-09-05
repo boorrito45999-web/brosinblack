@@ -71,6 +71,7 @@ const VEND_COST = 5;
 const POTION_HEAL = 1;
 
 const TILE = 48;
+const VEND_REACH = TILE * 2.5;
 const HALL_W = 4;
 const WALL = 0;
 const FLOOR = 1;
@@ -468,7 +469,7 @@ function drawVending(x, y) {
   ctx.fillStyle = "#f0e6d0";
   ctx.font = "bold 9px monospace";
   ctx.textAlign = "center";
-  ctx.fillText("$5", x + TILE / 2, y + 42);
+  ctx.fillText("E $5", x + TILE / 2, y + 42);
   ctx.textAlign = "start";
 }
 
@@ -656,13 +657,15 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault();
     keys.space = true;
   }
-  if (event.key.toLowerCase() === "e" && !event.repeat && !dead) {
-    player.shield = !player.shield;
+  if (!dead && !event.repeat && (event.key.toLowerCase() === "e" || event.code === "KeyE")) {
+    if (nearVending()) buyPotion();
+    else player.shield = !player.shield;
   }
-  if (event.key.toLowerCase() === "f" && !event.repeat && !dead) {
+  if (!dead && !event.repeat && (event.key.toLowerCase() === "f" || event.code === "KeyF")) {
+    event.preventDefault();
     buyPotion();
   }
-  if (event.key.toLowerCase() === "q" && !event.repeat && !dead) {
+  if (!dead && !event.repeat && (event.key.toLowerCase() === "q" || event.code === "KeyQ")) {
     drinkPotion();
   }
   if (event.key === "Shift") keys.shift = true;
@@ -820,9 +823,12 @@ function say(msg) {
 
 function nearVending() {
   const { tx, ty } = worldToTile(player.x, player.y);
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      if (getTile(tx + dx, ty + dy) === VENDING) return true;
+  for (let dy = -3; dy <= 3; dy++) {
+    for (let dx = -3; dx <= 3; dx++) {
+      if (getTile(tx + dx, ty + dy) !== VENDING) continue;
+      const cx = (tx + dx) * TILE + TILE / 2;
+      const cy = (ty + dy) * TILE + TILE / 2;
+      if (dist(player.x, player.y, cx, cy) <= VEND_REACH) return true;
     }
   }
   return false;
@@ -830,11 +836,11 @@ function nearVending() {
 
 function buyPotion() {
   if (!nearVending()) {
-    say("WALK UP TO A VENDING MACHINE");
+    say("GET CLOSER TO THE RED $5 MACHINE");
     return;
   }
   if (player.coins < VEND_COST) {
-    say("NEED " + VEND_COST + " COINS");
+    say("HAVE " + player.coins + "  NEED " + VEND_COST);
     return;
   }
   player.coins -= VEND_COST;
@@ -1319,7 +1325,7 @@ function draw() {
 
   if (nearVending() && !dead) {
     ctx.fillStyle = "#F5C518";
-    ctx.fillText("F  buy healing potion  (" + VEND_COST + " coins)", 16, 72);
+    ctx.fillText("E or F  buy healing potion  (" + VEND_COST + " coins)", 16, 72);
   }
   if (toast) {
     ctx.fillStyle = "#ffffff";
