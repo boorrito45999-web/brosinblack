@@ -1,4 +1,4 @@
-# trumpmustdie
+# brosinblack
 
 Top-down arena shooter. One HTML page. One JavaScript file.
 
@@ -39,7 +39,7 @@ You are a shape seen from above, inside a square. You move. You shoot.
 ## Commands
 
 ```bash
-cd ~/trumpmustdie
+cd ~/brosinblack
 pnpm install
 pnpm start
 ```
