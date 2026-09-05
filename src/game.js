@@ -83,10 +83,26 @@ const DESK = 4;
 const CABINET = 5;
 const PLANT = 6;
 const VENDING = 7;
+const FLOWER = 8;
+const GREENHOUSE = 9;
+const LAVA = 10;
+const GATE_RED = 11;
+const GATE_GREEN = 12;
+const GATE_PURPLE = 13;
+
+const BIOME_OFFICE = "office";
+const BIOME_COURTYARD = "courtyard";
+const BIOME_VOLCANO = "volcano";
+const BIOME_BOSS = "boss";
 
 const tiles = new Map();
 const cabinetState = new Map();
 const camera = { x: 0, y: 0 };
+const hazards = [];
+let biome = BIOME_OFFICE;
+let dragon = null;
+let clock = 0;
+let won = false;
 
 const linoleumImg = new Image();
 linoleumImg.src = "tiles/linoleum.jpg";
@@ -119,16 +135,44 @@ function worldToTile(x, y) {
 function isSolid(kind) {
   return (
     kind === WALL ||
+    kind === FLOWER ||
     kind === DESK ||
     kind === CABINET ||
     kind === PLANT ||
     kind === VENDING ||
+    kind === GATE_RED ||
+    kind === GATE_GREEN ||
+    kind === GATE_PURPLE ||
     kind === null
   );
 }
 
 function walkable(kind) {
-  return kind === FLOOR || kind === ROOM || kind === DOOR;
+  return (
+    kind === FLOOR ||
+    kind === ROOM ||
+    kind === DOOR ||
+    kind === GREENHOUSE ||
+    kind === LAVA
+  );
+}
+
+function isBoundary(kind) {
+  return kind === WALL || kind === FLOWER || kind === LAVA;
+}
+
+function isGate(kind) {
+  return kind === GATE_RED || kind === GATE_GREEN || kind === GATE_PURPLE;
+}
+
+function wallTile() {
+  if (biome === BIOME_COURTYARD) return FLOWER;
+  if (biome === BIOME_VOLCANO || biome === BIOME_BOSS) return LAVA;
+  return WALL;
+}
+
+function roomTile() {
+  return biome === BIOME_COURTYARD ? GREENHOUSE : ROOM;
 }
 
 function blockedAt(x, y) {
@@ -151,7 +195,7 @@ function randInt(min, max) {
 }
 
 function tryWall(tx, ty) {
-  if (getTile(tx, ty) === null) setTile(tx, ty, WALL);
+  if (getTile(tx, ty) === null) setTile(tx, ty, wallTile());
 }
 
 function facingGrid() {
@@ -204,7 +248,13 @@ function generateHall(tx, ty, dirX, dirY) {
   const len = randInt(16, 30);
   for (let i = 0; i < len; i++) {
     stampHall(x, y, dx, dy);
-    if (i > 4 && i < len - 4 && Math.random() < 0.16) {
+    if (
+      biome !== BIOME_VOLCANO &&
+      biome !== BIOME_BOSS &&
+      i > 4 &&
+      i < len - 4 &&
+      Math.random() < 0.16
+    ) {
       stampDoor(x, y, dx, dy, Math.random() < 0.5 ? 1 : -1);
     }
     if (i > 6 && i < len - 6 && Math.random() < 0.1) {
@@ -248,9 +298,10 @@ function generateRoom(tx, ty, dirX, dirY) {
   if (dirX === 0) ox = tx - Math.floor(w / 2);
   if (dirY === 0) oy = ty - Math.floor(h / 2);
 
+  const floorKind = roomTile();
   for (let y = oy; y < oy + h; y++) {
     for (let x = ox; x < ox + w; x++) {
-      if (getTile(x, y) !== DOOR) setTile(x, y, ROOM);
+      if (getTile(x, y) !== DOOR) setTile(x, y, floorKind);
     }
   }
   for (let x = ox - 1; x <= ox + w; x++) {
@@ -264,30 +315,50 @@ function generateRoom(tx, ty, dirX, dirY) {
 
   const entrance = (x, y) => Math.abs(x - tx) + Math.abs(y - ty) <= 2;
 
-  for (let y = oy + 2; y < oy + h - 2; y += 3) {
-    for (let x = ox + 2; x < ox + w - 2; x += 4) {
-      if (entrance(x, y)) continue;
-      if (getTile(x, y) === DOOR) continue;
-      setTile(x, y, DESK);
+  if (biome === BIOME_OFFICE) {
+    for (let y = oy + 2; y < oy + h - 2; y += 3) {
+      for (let x = ox + 2; x < ox + w - 2; x += 4) {
+        if (entrance(x, y)) continue;
+        if (getTile(x, y) === DOOR) continue;
+        setTile(x, y, DESK);
+      }
     }
   }
-  const cabWall = dirX !== 0 ? oy + 1 : ox + 1;
-  if (dirX !== 0) {
-    for (let x = ox + 2; x < ox + w - 2; x += 2) {
-      if (entrance(x, cabWall)) continue;
-      setTile(x, cabWall, CABINET);
-    }
-  } else {
-    for (let y = oy + 2; y < oy + h - 2; y += 2) {
-      if (entrance(cabWall, y)) continue;
-      setTile(cabWall, y, CABINET);
+  if (biome === BIOME_OFFICE || biome === BIOME_COURTYARD) {
+    const cabWall = dirX !== 0 ? oy + 1 : ox + 1;
+    if (dirX !== 0) {
+      for (let x = ox + 2; x < ox + w - 2; x += 2) {
+        if (entrance(x, cabWall)) continue;
+        setTile(x, cabWall, CABINET);
+      }
+    } else {
+      for (let y = oy + 2; y < oy + h - 2; y += 2) {
+        if (entrance(cabWall, y)) continue;
+        setTile(cabWall, y, CABINET);
+      }
     }
   }
   const px = ox + w - 2;
   const py = oy + h - 2;
-  if (!entrance(px, py) && getTile(px, py) === ROOM) setTile(px, py, PLANT);
+  if (
+    biome === BIOME_OFFICE &&
+    !entrance(px, py) &&
+    getTile(px, py) === ROOM
+  ) {
+    setTile(px, py, PLANT);
+  }
 
-  if (Math.random() < 0.7) placeVendingInRoom(ox, oy, w, h, entrance);
+  if (biome === BIOME_OFFICE && Math.random() < 0.7) {
+    placeVendingInRoom(ox, oy, w, h, entrance);
+  }
+  if (biome === BIOME_COURTYARD) {
+    pickups.push({
+      x: (ox + randInt(2, Math.max(2, w - 3))) * TILE + TILE / 2,
+      y: (oy + randInt(2, Math.max(2, h - 3))) * TILE + TILE / 2,
+      kind: "potion",
+      bob: Math.random() * 6,
+    });
+  }
 
   if (Math.random() < 0.55) {
     const ex = (ox + Math.floor(w / 2)) * TILE + TILE / 2;
@@ -297,6 +368,7 @@ function generateRoom(tx, ty, dirX, dirY) {
 }
 
 function maybeGenerate() {
+  if (biome === BIOME_BOSS) return;
   const { tx, ty } = worldToTile(player.x, player.y);
   const { dirX, dirY } = facingGrid();
   const here = getTile(tx, ty);
@@ -322,7 +394,7 @@ function maybeGenerate() {
       const cx = dirY === 0 ? ox : ox + i;
       const cy = dirY === 0 ? oy + i : oy;
       const t = getTile(cx, cy);
-      if (t === WALL) hitWall = true;
+      if (isBoundary(t)) hitWall = true;
       if (t !== null) empty = false;
     }
     if (hitWall) return;
@@ -333,7 +405,21 @@ function maybeGenerate() {
   }
 }
 
-function generateStart() {
+function stampGate(tx, ty, kind) {
+  setTile(tx, ty, kind);
+  setTile(tx, ty + 1, kind);
+}
+
+function spawnKey(tx, ty, color) {
+  pickups.push({
+    x: tx * TILE + TILE / 2,
+    y: ty * TILE + TILE / 2,
+    kind: "key-" + color,
+    bob: Math.random() * 6,
+  });
+}
+
+function generateOffice() {
   const y2 = HALL_W + 6;
   for (let x = -30; x <= 30; x++) {
     stampHall(x, 0, 1, 0);
@@ -352,6 +438,120 @@ function generateStart() {
   setTile(-2, 0, VENDING);
   setTile(6, y2 + HALL_W - 1, VENDING);
   setTile(12, 0, CABINET);
+  spawnKey(-8, 2, "red");
+  stampGate(28, 1, GATE_RED);
+}
+
+function generateCourtyard() {
+  const y2 = HALL_W + 6;
+  for (let x = -24; x <= 24; x++) {
+    stampHall(x, 0, 1, 0);
+    stampHall(x, y2, 1, 0);
+  }
+  for (let y = 0; y <= y2; y++) {
+    stampHall(-10, y, 0, 1);
+    stampHall(10, y, 0, 1);
+  }
+  stampDoor(-16, 0, 1, 0, -1);
+  stampDoor(-4, 0, 1, 0, 1);
+  stampDoor(6, 0, 1, 0, -1);
+  stampDoor(16, 0, 1, 0, 1);
+  stampDoor(-6, y2, 1, 0, 1);
+  stampDoor(6, y2, 1, 0, -1);
+  setTile(4, 0, CABINET);
+  setTile(-4, y2 + HALL_W - 1, CABINET);
+  pickups.push({
+    x: 2 * TILE,
+    y: TILE * 2,
+    kind: "potion",
+    bob: 1,
+  });
+  spawnKey(18, 2, "green");
+  stampGate(-22, 1, GATE_GREEN);
+}
+
+function generateVolcano() {
+  const y2 = HALL_W + 8;
+  for (let x = -20; x <= 20; x++) {
+    stampHall(x, 0, 1, 0);
+    stampHall(x, y2, 1, 0);
+  }
+  for (let y = 0; y <= y2; y++) {
+    stampHall(-8, y, 0, 1);
+    stampHall(8, y, 0, 1);
+  }
+  spawnKey(0, y2 + 2, "purple");
+  stampGate(18, 1, GATE_PURPLE);
+}
+
+function generateBossArena() {
+  const w = 38;
+  const h = 30;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const edge = x < 2 || y < 2 || x >= w - 2 || y >= h - 2;
+      const pool =
+        !edge &&
+        ((x === 8 && y > 8 && y < 18) ||
+          (x === 28 && y > 10 && y < 20) ||
+          (y === 14 && x > 14 && x < 22));
+      setTile(x, y, edge || pool ? LAVA : FLOOR);
+    }
+  }
+  player.x = (w / 2) * TILE;
+  player.y = (h - 6) * TILE;
+  dragon = makeDragon((w / 2) * TILE, 9 * TILE);
+}
+
+function enterBiome(next) {
+  biome = next;
+  tiles.clear();
+  cabinetState.clear();
+  enemies.length = 0;
+  bullets.length = 0;
+  pickups.length = 0;
+  hazards.length = 0;
+  dragon = null;
+  player.hidden = false;
+  player.hideTx = null;
+  player.hideTy = null;
+  player.x = TILE * 2;
+  player.y = TILE * 2;
+  if (next === BIOME_COURTYARD) {
+    generateCourtyard();
+    enemies.push(makeEnemy(10 * TILE, TILE * 2));
+    say("COURTYARD  find the green key");
+  } else if (next === BIOME_VOLCANO) {
+    generateVolcano();
+    enemies.push(makeEnemy(8 * TILE, TILE * 2));
+    enemies.push(makeEnemy(-6 * TILE, TILE * 2));
+    say("VOLCANO  lava is instant death");
+  } else if (next === BIOME_BOSS) {
+    generateBossArena();
+    say("THE DRAGON");
+  }
+}
+
+function gateNeeded(kind) {
+  if (kind === GATE_RED) return "red";
+  if (kind === GATE_GREEN) return "green";
+  if (kind === GATE_PURPLE) return "purple";
+  return null;
+}
+
+function tryEnterGate(x, y) {
+  const { tx, ty } = worldToTile(x, y);
+  const kind = getTile(tx, ty);
+  const need = gateNeeded(kind);
+  if (!need) return false;
+  if (!player.keys[need]) {
+    say("LOCKED  need the " + need.toUpperCase() + " key");
+    return true;
+  }
+  if (kind === GATE_RED) enterBiome(BIOME_COURTYARD);
+  else if (kind === GATE_GREEN) enterBiome(BIOME_VOLCANO);
+  else if (kind === GATE_PURPLE) enterBiome(BIOME_BOSS);
+  return true;
 }
 
 function placeVendingInRoom(ox, oy, w, h, entrance) {
@@ -514,6 +714,81 @@ function drawVending(x, y) {
   ctx.textAlign = "start";
 }
 
+function drawFlowerBed(tx, ty, x, y) {
+  ctx.fillStyle = "#2f5a28";
+  ctx.fillRect(x, y, TILE, TILE);
+  ctx.fillStyle = "#3f7a36";
+  ctx.fillRect(x + 3, y + 3, TILE - 6, TILE - 6);
+  const palette = ["#e35d6a", "#f0d14a", "#d96ad3", "#f7f0d8", "#7ec8ff"];
+  const n = 3 + ((tx * 13 + ty * 7) % 3);
+  for (let i = 0; i < n; i++) {
+    const fx = x + 10 + ((tx * 5 + i * 11 + ty) % 28);
+    const fy = y + 10 + ((ty * 9 + i * 7 + tx) % 28);
+    ctx.fillStyle = palette[(tx + ty + i) % palette.length];
+    ctx.beginPath();
+    ctx.arc(fx, fy, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawGreenhouse(x, y) {
+  ctx.fillStyle = "#b7d9c2";
+  ctx.fillRect(x, y, TILE, TILE);
+  ctx.strokeStyle = "rgba(40, 70, 50, 0.35)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x + TILE / 2, y);
+  ctx.lineTo(x + TILE / 2, y + TILE);
+  ctx.moveTo(x, y + TILE / 2);
+  ctx.lineTo(x + TILE, y + TILE / 2);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(180, 255, 210, 0.18)";
+  ctx.fillRect(x + 4, y + 4, TILE - 8, TILE - 8);
+}
+
+function drawLava(x, y) {
+  const pulse = 0.5 + 0.5 * Math.sin(clock * 3 + x * 0.04 + y * 0.03);
+  ctx.fillStyle = "#4a1208";
+  ctx.fillRect(x, y, TILE, TILE);
+  ctx.fillStyle = `rgb(${180 + pulse * 70 | 0}, ${40 + pulse * 50 | 0}, 10)`;
+  ctx.fillRect(x + 3, y + 3, TILE - 6, TILE - 6);
+  ctx.fillStyle = `rgba(255, 220, 80, ${0.25 + pulse * 0.35})`;
+  ctx.beginPath();
+  ctx.arc(x + TILE / 2, y + TILE / 2, 8 + pulse * 4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawRockFloor(x, y) {
+  ctx.fillStyle = "#3a322c";
+  ctx.fillRect(x, y, TILE, TILE);
+  ctx.fillStyle = "#4a423a";
+  ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+}
+
+function drawGrassFloor(x, y) {
+  ctx.fillStyle = "#4a7c3a";
+  ctx.fillRect(x, y, TILE, TILE);
+  ctx.fillStyle = "#5a9146";
+  ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+}
+
+function drawGate(kind, x, y) {
+  const color =
+    kind === GATE_RED ? "#c62828" : kind === GATE_GREEN ? "#2e7d32" : "#6a1b9a";
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(x, y, TILE, TILE);
+  ctx.fillStyle = color;
+  ctx.fillRect(x + 6, y + 4, TILE - 12, TILE - 8);
+  ctx.fillStyle = "#111";
+  for (let i = 0; i < 3; i++) {
+    ctx.fillRect(x + 12 + i * 8, y + 8, 3, TILE - 16);
+  }
+  ctx.fillStyle = "#f5c518";
+  ctx.beginPath();
+  ctx.arc(x + TILE - 14, y + TILE / 2, 4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 function drawDoorTile(x, y) {
   ctx.fillStyle = "#3b2a1c";
   ctx.fillRect(x, y, TILE, TILE);
@@ -541,26 +816,32 @@ function drawGround() {
       const x = tx * TILE - camera.x;
       const y = ty * TILE - camera.y;
       if (kind === FLOOR) {
-        if (!fillWorldPattern(linoleumPat, x, y, TILE, TILE)) {
+        if (biome === BIOME_COURTYARD) {
+          drawGrassFloor(x, y);
+        } else if (biome === BIOME_VOLCANO || biome === BIOME_BOSS) {
+          drawRockFloor(x, y);
+        } else if (!fillWorldPattern(linoleumPat, x, y, TILE, TILE)) {
           ctx.fillStyle = "#d4c7a1";
           ctx.fillRect(x, y, TILE, TILE);
         }
-        const inner =
-          walkable(getTile(tx - 1, ty)) && walkable(getTile(tx + 1, ty)) ||
-          walkable(getTile(tx, ty - 1)) && walkable(getTile(tx, ty + 1));
-        if (inner && (tx + ty) % 5 === 0) {
-          const g = ctx.createRadialGradient(
-            x + TILE / 2,
-            y + TILE / 2,
-            4,
-            x + TILE / 2,
-            y + TILE / 2,
-            TILE
-          );
-          g.addColorStop(0, "rgba(255, 244, 210, 0.28)");
-          g.addColorStop(1, "rgba(255, 244, 210, 0)");
-          ctx.fillStyle = g;
-          ctx.fillRect(x, y, TILE, TILE);
+        if (biome === BIOME_OFFICE) {
+          const inner =
+            walkable(getTile(tx - 1, ty)) && walkable(getTile(tx + 1, ty)) ||
+            walkable(getTile(tx, ty - 1)) && walkable(getTile(tx, ty + 1));
+          if (inner && (tx + ty) % 5 === 0) {
+            const g = ctx.createRadialGradient(
+              x + TILE / 2,
+              y + TILE / 2,
+              4,
+              x + TILE / 2,
+              y + TILE / 2,
+              TILE
+            );
+            g.addColorStop(0, "rgba(255, 244, 210, 0.28)");
+            g.addColorStop(1, "rgba(255, 244, 210, 0)");
+            ctx.fillStyle = g;
+            ctx.fillRect(x, y, TILE, TILE);
+          }
         }
       } else if (kind === ROOM) {
         if (!fillWorldPattern(carpetPat, x, y, TILE, TILE)) {
@@ -582,10 +863,13 @@ function drawGround() {
           getTile(tx, ty - 1) === FLOOR ||
           getTile(tx, ty + 1) === FLOOR;
         if (hall) {
-          if (!fillWorldPattern(linoleumPat, x, y, TILE, TILE)) {
+          if (biome === BIOME_COURTYARD) drawGrassFloor(x, y);
+          else if (!fillWorldPattern(linoleumPat, x, y, TILE, TILE)) {
             ctx.fillStyle = "#d4c7a1";
             ctx.fillRect(x, y, TILE, TILE);
           }
+        } else if (biome === BIOME_COURTYARD) {
+          drawGreenhouse(x, y);
         } else if (!fillWorldPattern(carpetPat, x, y, TILE, TILE)) {
           ctx.fillStyle = "#6a5a4a";
           ctx.fillRect(x, y, TILE, TILE);
@@ -613,6 +897,14 @@ function drawGround() {
           ctx.fillRect(x, y, TILE, TILE);
         }
         drawVending(x, y);
+      } else if (kind === GREENHOUSE) {
+        drawGreenhouse(x, y);
+      } else if (kind === FLOWER) {
+        drawFlowerBed(tx, ty, x, y);
+      } else if (kind === LAVA) {
+        drawLava(x, y);
+      } else if (isGate(kind)) {
+        drawGate(kind, x, y);
       } else {
         if (!fillWorldPattern(wallPat, x, y, TILE, TILE)) {
           ctx.fillStyle = "#7a7368";
@@ -624,7 +916,8 @@ function drawGround() {
   }
 }
 
-generateStart();
+const pickups = [];
+generateOffice();
 
 const player = {
   x: TILE * 2,
@@ -650,10 +943,10 @@ const player = {
   hideTy: null,
   disguise: false,
   disguiseTime: 0,
+  keys: { red: false, green: false, purple: false },
 };
 
 const bullets = [];
-const pickups = [];
 const keys = {};
 let toast = "";
 let toastTime = 0;
@@ -683,17 +976,19 @@ enemyCrouchSheet.src = "enemy-crouch.png";
 const boomSheet = new Image();
 boomSheet.src = "boom.png";
 
-function makeEnemy(x, y) {
+function makeEnemy(x, y, kind) {
+  const whelp = kind === "whelp";
   return {
     x,
     y,
+    kind: whelp ? "whelp" : "goon",
     facingX: 0,
     facingY: 1,
     moving: false,
     animTime: 0,
     alive: true,
     stun: 0,
-    fireCooldown: 1,
+    fireCooldown: whelp ? 999 : 1,
     crouch: 0,
     wasMoving: false,
     bark: "",
@@ -701,7 +996,7 @@ function makeEnemy(x, y) {
     exploding: false,
     explodeTime: 0,
     fallen: false,
-    hp: ENEMY_MAX_HP,
+    hp: whelp ? 3 : ENEMY_MAX_HP,
   };
 }
 
@@ -853,6 +1148,36 @@ function drawPickups() {
       ctx.stroke();
       continue;
     }
+    if (item.kind === "potion") {
+      ctx.fillStyle = "#8b1e2d";
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#e23b4a";
+      ctx.fillRect(x - 4, y - 14, 8, 8);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 10px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("+", x, y + 4);
+      ctx.textAlign = "start";
+      continue;
+    }
+    if (item.kind && item.kind.startsWith("key-")) {
+      const col =
+        item.kind === "key-red"
+          ? "#e53935"
+          : item.kind === "key-green"
+            ? "#43a047"
+            : "#8e24aa";
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(x - 4, y, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(x - 2, y - 3, 16, 6);
+      ctx.fillRect(x + 8, y + 3, 4, 6);
+      ctx.fillRect(x + 12, y + 3, 4, 4);
+      continue;
+    }
     const color =
       item.kind === "damage" ? "#FF3B3B" : item.kind === "spread" ? "#7CFF6B" : "#4ECBFF";
     const label =
@@ -872,6 +1197,26 @@ function drawPickups() {
 function applyPickup(kind) {
   if (kind === "coin") {
     player.coins += 1;
+    return;
+  }
+  if (kind === "potion") {
+    player.potions += 1;
+    say("POTION +1  (Q to drink)");
+    return;
+  }
+  if (kind === "key-red") {
+    player.keys.red = true;
+    say("RED KEY");
+    return;
+  }
+  if (kind === "key-green") {
+    player.keys.green = true;
+    say("GREEN KEY");
+    return;
+  }
+  if (kind === "key-purple") {
+    player.keys.purple = true;
+    say("PURPLE KEY");
     return;
   }
   if (kind === "damage") {
@@ -1235,12 +1580,265 @@ function shieldBlocks(bullet) {
   return player.facingX * fromX + player.facingY * fromY > 0;
 }
 
+const DRAGON_HP = 32;
+const DRAGON_ATTACKS = ["spikes", "spit", "whelps", "rocks", "stomp"];
+
+function makeDragon(x, y) {
+  return {
+    x,
+    y,
+    hp: DRAGON_HP,
+    maxHp: DRAGON_HP,
+    alive: true,
+    cooldown: 1.4,
+    windup: 0,
+    attack: null,
+    hop: 0,
+  };
+}
+
+function dragonStartAttack() {
+  if (!dragon || !dragon.alive) return;
+  dragon.attack = DRAGON_ATTACKS[randInt(0, DRAGON_ATTACKS.length - 1)];
+  dragon.windup = 0.85;
+  if (dragon.attack === "spikes") {
+    for (let i = 0; i < 8; i++) {
+      const ang = (Math.PI * 2 * i) / 8 + Math.random() * 0.2;
+      const rad = 40 + Math.random() * 120;
+      hazards.push({
+        kind: "spike",
+        x: player.x + Math.cos(ang) * rad,
+        y: player.y + Math.sin(ang) * rad,
+        t: 0,
+        up: false,
+        hit: false,
+      });
+    }
+  } else if (dragon.attack === "rocks") {
+    for (let i = 0; i < 6; i++) {
+      hazards.push({
+        kind: "rock",
+        x: player.x + (Math.random() - 0.5) * 280,
+        y: player.y + (Math.random() - 0.5) * 220,
+        t: 0,
+        smash: false,
+        hit: false,
+      });
+    }
+  } else if (dragon.attack === "stomp") {
+    dragon.hop = 1;
+    hazards.push({
+      kind: "stomp",
+      x: player.x,
+      y: player.y,
+      t: 0,
+      hit: false,
+    });
+  }
+}
+
+function updateDragon(dt) {
+  if (!dragon || !dragon.alive) return;
+  if (dragon.hop > 0) dragon.hop -= dt;
+  if (dragon.windup > 0) {
+    dragon.windup -= dt;
+    if (dragon.windup <= 0) {
+      if (dragon.attack === "spit") {
+        const ang0 = Math.atan2(player.y - dragon.y, player.x - dragon.x);
+        for (const off of [-0.35, -0.15, 0, 0.15, 0.35]) {
+          const a = ang0 + off;
+          bullets.push({
+            x: dragon.x,
+            y: dragon.y + 20,
+            vx: Math.cos(a) * 280,
+            vy: Math.sin(a) * 280,
+            from: "lava",
+            life: 1.1,
+          });
+        }
+      } else if (dragon.attack === "whelps") {
+        for (let i = 0; i < 3; i++) {
+          enemies.push(
+            makeEnemy(
+              dragon.x + (Math.random() - 0.5) * 80,
+              dragon.y + 50 + Math.random() * 40,
+              "whelp"
+            )
+          );
+        }
+        say("WHELPS");
+      }
+      dragon.attack = null;
+      dragon.cooldown = 2.2 + Math.random();
+    }
+    return;
+  }
+  dragon.cooldown -= dt;
+  if (dragon.cooldown <= 0) dragonStartAttack();
+}
+
+function updateHazards(dt) {
+  for (let i = hazards.length - 1; i >= 0; i--) {
+    const h = hazards[i];
+    h.t = (h.t || 0) + dt;
+    if (h.kind === "spike") {
+      if (!h.up && h.t > 0.7) h.up = true;
+      if (h.up && !h.hit && dist(player.x, player.y, h.x, h.y) < 28) {
+        h.hit = true;
+        hurtPlayer(1);
+      }
+      if (h.t > 1.3) hazards.splice(i, 1);
+    } else if (h.kind === "rock") {
+      if (!h.smash && h.t > 0.85) h.smash = true;
+      if (h.smash && !h.hit && dist(player.x, player.y, h.x, h.y) < 36) {
+        h.hit = true;
+        hurtPlayer(1);
+      }
+      if (h.t > 1.35) hazards.splice(i, 1);
+    } else if (h.kind === "stomp") {
+      if (h.t > 0.7 && !h.hit) {
+        h.hit = true;
+        const d = dist(player.x, player.y, h.x, h.y);
+        if (d < 70) hurtPlayer(99);
+        else if (d < 120) hurtPlayer(1);
+      }
+      if (h.t > 1.2) hazards.splice(i, 1);
+    } else if (h.kind === "lavaPool") {
+      h.life -= dt;
+      if (h.life <= 0) hazards.splice(i, 1);
+    }
+  }
+}
+
+function drawHazards() {
+  for (const h of hazards) {
+    const x = h.x - camera.x;
+    const y = h.y - camera.y;
+    if (h.kind === "spike") {
+      if (!h.up) {
+        ctx.strokeStyle = "rgba(255,80,80,0.8)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, 22, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = "#d0d6de";
+        ctx.beginPath();
+        ctx.moveTo(x, y - 34);
+        ctx.lineTo(x + 10, y + 8);
+        ctx.lineTo(x - 10, y + 8);
+        ctx.closePath();
+        ctx.fill();
+      }
+    } else if (h.kind === "rock") {
+      if (!h.smash) {
+        const r = 10 + h.t * 18;
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.beginPath();
+        ctx.ellipse(x, y, r, r * 0.45, 0, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = "#5a4638";
+        ctx.beginPath();
+        ctx.arc(x, y, 22, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (h.kind === "stomp") {
+      ctx.strokeStyle = h.t > 0.7 ? "#ff3b3b" : "#f5c518";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(x, y, 70, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (h.kind === "lavaPool") {
+      ctx.fillStyle = "rgba(220, 80, 20, 0.85)";
+      ctx.beginPath();
+      ctx.ellipse(x, y, 28, 18, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawDragon() {
+  if (!dragon || !dragon.alive) return;
+  const x = dragon.x - camera.x;
+  const y = dragon.y - camera.y - (dragon.hop > 0 ? 40 : 0);
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.beginPath();
+  ctx.ellipse(x, y + 70, 70, 18, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#2a1038";
+  ctx.beginPath();
+  ctx.ellipse(x, y + 10, 78, 42, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#4a1a68";
+  ctx.beginPath();
+  ctx.moveTo(x - 90, y + 10);
+  ctx.quadraticCurveTo(x - 140, y - 50, x - 40, y - 10);
+  ctx.quadraticCurveTo(x - 70, y + 20, x - 90, y + 10);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x + 90, y + 10);
+  ctx.quadraticCurveTo(x + 140, y - 50, x + 40, y - 10);
+  ctx.quadraticCurveTo(x + 70, y + 20, x + 90, y + 10);
+  ctx.fill();
+  ctx.fillStyle = "#3b1450";
+  ctx.beginPath();
+  ctx.ellipse(x, y - 38, 28, 24, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#ff3b3b";
+  ctx.beginPath();
+  ctx.arc(x - 10, y - 42, 5, 0, Math.PI * 2);
+  ctx.arc(x + 10, y - 42, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#f5c518";
+  ctx.beginPath();
+  ctx.moveTo(x - 8, y - 58);
+  ctx.lineTo(x - 2, y - 78);
+  ctx.lineTo(x + 4, y - 58);
+  ctx.fill();
+  ctx.fillStyle = "#1a081f";
+  ctx.fillRect(x - 8, y - 28, 16, 10);
+  if (dragon.attack === "spit" && dragon.windup > 0) {
+    ctx.fillStyle = "#ff6a20";
+    ctx.beginPath();
+    ctx.arc(x, y - 20, 10, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function hurtPlayer(amount) {
+  if (dead || player.hidden) return;
+  player.hp -= amount;
+  if (player.hp <= 0) {
+    player.hp = 0;
+    dead = true;
+    player.moving = false;
+  }
+}
+
+function onLava(x, y) {
+  const { tx, ty } = worldToTile(x, y);
+  if (getTile(tx, ty) === LAVA) return true;
+  for (const h of hazards) {
+    if (h.kind === "lavaPool" && dist(x, y, h.x, h.y) < 26) return true;
+  }
+  return false;
+}
+
 function update(dt) {
+  clock += dt;
   if (toastTime > 0) {
     toastTime -= dt;
     if (toastTime <= 0) toast = "";
   }
-  if (dead) return;
+  if (dead || won) return;
+  if (onLava(player.x, player.y)) {
+    player.hp = 0;
+    dead = true;
+    player.moving = false;
+    say("LAVA");
+    return;
+  }
 
   if (fireCooldown > 0) fireCooldown -= dt;
   if (player.stun > 0) player.stun -= dt;
@@ -1315,7 +1913,9 @@ function update(dt) {
       const nextX = player.x + dx * speed * dt;
       const nextY = player.y + dy * speed * dt;
       if (!blockedAt(nextX, player.y)) player.x = nextX;
+      else tryEnterGate(nextX, player.y);
       if (!blockedAt(player.x, nextY)) player.y = nextY;
+      else tryEnterGate(player.x, nextY);
     }
     maybeGenerate();
   }
@@ -1356,7 +1956,12 @@ function update(dt) {
     enemy.facingX = toX / toLen;
     enemy.facingY = toY / toLen;
 
-    if (enemy.stun <= 0 && enemy.crouch <= 0 && enemy.fireCooldown <= 0) {
+    if (
+      enemy.kind !== "whelp" &&
+      enemy.stun <= 0 &&
+      enemy.crouch <= 0 &&
+      enemy.fireCooldown <= 0
+    ) {
       enemy.crouch = CROUCH_TIME;
       enemy.animTime = 0;
       enemyShoot(enemy);
@@ -1369,11 +1974,18 @@ function update(dt) {
     enemy.moving = chasing;
 
     if (chasing) {
-      const nextX = enemy.x + enemy.facingX * ENEMY_SPEED * dt;
-      const nextY = enemy.y + enemy.facingY * ENEMY_SPEED * dt;
+      const spd = enemy.kind === "whelp" ? ENEMY_SPEED * 1.45 : ENEMY_SPEED;
+      const nextX = enemy.x + enemy.facingX * spd * dt;
+      const nextY = enemy.y + enemy.facingY * spd * dt;
       if (!blockedAt(nextX, enemy.y)) enemy.x = nextX;
       if (!blockedAt(enemy.x, nextY)) enemy.y = nextY;
-      if (Math.random() < 0.4 * dt) bark(enemy, "DIEDIEDIE!");
+      if (onLava(enemy.x, enemy.y)) {
+        killEnemy(enemy);
+        continue;
+      }
+      if (Math.random() < 0.4 * dt) {
+        bark(enemy, enemy.kind === "whelp" ? "SKREE!" : "DIEDIEDIE!");
+      }
     }
 
     if (
@@ -1404,23 +2016,62 @@ function update(dt) {
       sy < -40 ||
       sx > canvas.width + 40 ||
       sy > canvas.height + 40;
+    if (bullet.life != null) {
+      bullet.life -= dt;
+      if (bullet.life <= 0) {
+        if (bullet.from === "lava") {
+          hazards.push({ kind: "lavaPool", x: bullet.x, y: bullet.y, life: 4 });
+        }
+        bullets.splice(i, 1);
+        continue;
+      }
+    }
     if (off) {
+      if (bullet.from === "lava") {
+        hazards.push({ kind: "lavaPool", x: bullet.x, y: bullet.y, life: 4 });
+      }
       bullets.splice(i, 1);
       continue;
     }
 
     if (bullet.from === "player") {
       let hit = false;
-      for (const enemy of enemies) {
-        if (!enemy.alive) continue;
-        if (dist(bullet.x, bullet.y, enemy.x, enemy.y) < HIT_RADIUS) {
-          enemy.hp -= bullet.damage || 1;
-          if (enemy.hp <= 0) killEnemy(enemy);
-          hit = true;
-          break;
+      if (dragon && dragon.alive && dist(bullet.x, bullet.y, dragon.x, dragon.y) < 70) {
+        dragon.hp -= bullet.damage || 1;
+        hit = true;
+        if (dragon.hp <= 0) {
+          dragon.hp = 0;
+          dragon.alive = false;
+          won = true;
+          say("THE DRAGON FALLS");
+        }
+      }
+      if (!hit) {
+        for (const enemy of enemies) {
+          if (!enemy.alive) continue;
+          const rad = enemy.kind === "whelp" ? HIT_RADIUS * 0.75 : HIT_RADIUS;
+          if (dist(bullet.x, bullet.y, enemy.x, enemy.y) < rad) {
+            enemy.hp -= bullet.damage || 1;
+            if (enemy.hp <= 0) killEnemy(enemy);
+            hit = true;
+            break;
+          }
         }
       }
       if (hit) bullets.splice(i, 1);
+    } else if (bullet.from === "lava") {
+      if (dist(bullet.x, bullet.y, player.x, player.y) < HIT_RADIUS && !player.hidden) {
+        player.hp = 0;
+        dead = true;
+        player.moving = false;
+        say("LAVA");
+        bullets.splice(i, 1);
+      } else if (isSolid(getTile(tx, ty)) || bullet.life <= 0) {
+        hazards.push({ kind: "lavaPool", x: bullet.x, y: bullet.y, life: 4 });
+        bullets.splice(i, 1);
+      } else {
+        bullet.life -= dt;
+      }
     } else if (player.hidden) {
       // stuffed in a closet. bullets pass.
     } else if (shieldBlocks(bullet)) {
@@ -1444,10 +2095,15 @@ function update(dt) {
       pickups.splice(i, 1);
     }
   }
+
+  updateDragon(dt);
+  updateHazards(dt);
 }
 
 function draw() {
   drawGround();
+  drawHazards();
+  drawDragon();
 
   drawPlayer();
   for (const enemy of enemies) {
@@ -1455,7 +2111,8 @@ function draw() {
   }
 
   for (const bullet of bullets) {
-    ctx.fillStyle = bullet.from === "enemy" ? "#FF5A3A" : "#FFE14A";
+    ctx.fillStyle =
+      bullet.from === "lava" ? "#ff6a20" : bullet.from === "enemy" ? "#FF5A3A" : "#FFE14A";
     ctx.save();
     ctx.translate(bullet.x - camera.x, bullet.y - camera.y);
     ctx.rotate(Math.atan2(bullet.vy, bullet.vx));
@@ -1468,10 +2125,18 @@ function draw() {
   ctx.fillStyle = "#aaaaaa";
   ctx.font = "16px monospace";
   const gunName = player.weapon === "ak" ? "AK-47" : "PISTOL";
+  const biomeName =
+    biome === BIOME_COURTYARD
+      ? "COURTYARD"
+      : biome === BIOME_VOLCANO
+        ? "VOLCANO"
+        : biome === BIOME_BOSS
+          ? "DRAGON LAIR"
+          : "OFFICE";
   ctx.fillText(
-    player.shield
-      ? "WASD  |  SPACE  |  1/2 gun  |  E shield (UP)  |  Z loot  X hide  |  " + gunName
-      : "WASD  |  SPACE  |  1/2 gun  |  E shield  |  Z loot  X hide  |  " + gunName,
+    biomeName +
+      "  |  WASD  SPACE  1/2  E  Z/X  |  " +
+      gunName,
     16,
     28
   );
@@ -1491,10 +2156,23 @@ function draw() {
       player.coins +
       "  |  POTIONS " +
       player.potions +
+      "  |  KEYS " +
+      (player.keys.red ? "R " : "") +
+      (player.keys.green ? "G " : "") +
+      (player.keys.purple ? "P " : "") +
+      (!player.keys.red && !player.keys.green && !player.keys.purple ? "-" : "") +
       (buffs.length ? "  |  " + buffs.join(" ") : ""),
     16,
     50
   );
+  if (dragon && dragon.alive) {
+    ctx.fillStyle = "#ff3b3b";
+    ctx.fillText("DRAGON " + Math.ceil(dragon.hp) + "/" + dragon.maxHp, 16, canvas.height - 24);
+    ctx.fillStyle = "#3a1038";
+    ctx.fillRect(16, canvas.height - 16, 220, 8);
+    ctx.fillStyle = "#c62828";
+    ctx.fillRect(16, canvas.height - 16, 220 * (dragon.hp / dragon.maxHp), 8);
+  }
 
   let hintY = 72;
   if (!dead && player.hidden) {
@@ -1524,7 +2202,16 @@ function draw() {
     ctx.fillText(toast, 16, hintY);
   }
 
-  if (dead) {
+  if (won) {
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#F5C518";
+    ctx.font = "48px monospace";
+    ctx.fillText("DRAGON DOWN", 16, 80);
+    ctx.fillStyle = "#aaaaaa";
+    ctx.font = "16px monospace";
+    ctx.fillText("you emptied the building. refresh to run it back.", 16, 110);
+  } else if (dead) {
     ctx.fillStyle = "rgba(0,0,0,0.45)";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "#FF5A3A";
