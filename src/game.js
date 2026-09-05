@@ -67,6 +67,8 @@ const DASH_TIME = 0.16;
 const DASH_COOLDOWN = 0.7;
 const PICK_RADIUS = 32;
 const POWER_KINDS = ["damage", "spread", "dash"];
+const VEND_COST = 5;
+const POTION_HEAL = 1;
 
 const TILE = 48;
 const HALL_W = 4;
@@ -77,6 +79,7 @@ const ROOM = 3;
 const DESK = 4;
 const CABINET = 5;
 const PLANT = 6;
+const VENDING = 7;
 
 const tiles = new Map();
 const camera = { x: 0, y: 0 };
@@ -110,7 +113,14 @@ function worldToTile(x, y) {
 }
 
 function isSolid(kind) {
-  return kind === WALL || kind === DESK || kind === CABINET || kind === PLANT || kind === null;
+  return (
+    kind === WALL ||
+    kind === DESK ||
+    kind === CABINET ||
+    kind === PLANT ||
+    kind === VENDING ||
+    kind === null
+  );
 }
 
 function walkable(kind) {
@@ -273,6 +283,8 @@ function generateRoom(tx, ty, dirX, dirY) {
   const py = oy + h - 2;
   if (!entrance(px, py) && getTile(px, py) === ROOM) setTile(px, py, PLANT);
 
+  if (Math.random() < 0.7) placeVendingInRoom(ox, oy, w, h, entrance);
+
   if (Math.random() < 0.55) {
     const ex = (ox + Math.floor(w / 2)) * TILE + TILE / 2;
     const ey = (oy + Math.floor(h / 2)) * TILE + TILE / 2;
@@ -333,6 +345,27 @@ function generateStart() {
   stampDoor(22, 0, 1, 0, 1);
   stampDoor(-8, y2, 1, 0, 1);
   stampDoor(8, y2, 1, 0, -1);
+  setTile(-2, 0, VENDING);
+  setTile(6, y2 + HALL_W - 1, VENDING);
+}
+
+function placeVendingInRoom(ox, oy, w, h, entrance) {
+  const spots = [];
+  for (let x = ox + 1; x < ox + w - 1; x++) {
+    if (getTile(x, oy) === ROOM && !entrance(x, oy)) spots.push([x, oy]);
+    if (getTile(x, oy + h - 1) === ROOM && !entrance(x, oy + h - 1)) {
+      spots.push([x, oy + h - 1]);
+    }
+  }
+  for (let y = oy + 1; y < oy + h - 1; y++) {
+    if (getTile(ox, y) === ROOM && !entrance(ox, y)) spots.push([ox, y]);
+    if (getTile(ox + w - 1, y) === ROOM && !entrance(ox + w - 1, y)) {
+      spots.push([ox + w - 1, y]);
+    }
+  }
+  if (!spots.length) return;
+  const pick = spots[randInt(0, spots.length - 1)];
+  setTile(pick[0], pick[1], VENDING);
 }
 
 function ensurePatterns() {
@@ -416,6 +449,29 @@ function drawPlant(x, y) {
   ctx.fill();
 }
 
+function drawVending(x, y) {
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  ctx.fillRect(x + 8, y + 10, TILE - 14, TILE - 12);
+  ctx.fillStyle = "#8b1e2d";
+  ctx.fillRect(x + 6, y + 2, TILE - 12, TILE - 6);
+  ctx.fillStyle = "#241014";
+  ctx.fillRect(x + 10, y + 6, TILE - 20, 20);
+  const colors = ["#e23b4a", "#3ad17e", "#4ecbff"];
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = colors[i];
+    ctx.beginPath();
+    ctx.arc(x + 16 + i * 8, y + 16, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = "#c9a227";
+  ctx.fillRect(x + TILE / 2 - 7, y + 28, 14, 5);
+  ctx.fillStyle = "#f0e6d0";
+  ctx.font = "bold 9px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("$5", x + TILE / 2, y + 42);
+  ctx.textAlign = "start";
+}
+
 function drawDoorTile(x, y) {
   ctx.fillStyle = "#3b2a1c";
   ctx.fillRect(x, y, TILE, TILE);
@@ -489,6 +545,22 @@ function drawGround() {
           ctx.fillRect(x, y, TILE, TILE);
         }
         drawPlant(x, y);
+      } else if (kind === VENDING) {
+        const hall =
+          getTile(tx - 1, ty) === FLOOR ||
+          getTile(tx + 1, ty) === FLOOR ||
+          getTile(tx, ty - 1) === FLOOR ||
+          getTile(tx, ty + 1) === FLOOR;
+        if (hall) {
+          if (!fillWorldPattern(linoleumPat, x, y, TILE, TILE)) {
+            ctx.fillStyle = "#d4c7a1";
+            ctx.fillRect(x, y, TILE, TILE);
+          }
+        } else if (!fillWorldPattern(carpetPat, x, y, TILE, TILE)) {
+          ctx.fillStyle = "#6a5a4a";
+          ctx.fillRect(x, y, TILE, TILE);
+        }
+        drawVending(x, y);
       } else {
         if (!fillWorldPattern(wallPat, x, y, TILE, TILE)) {
           ctx.fillStyle = "#7a7368";
@@ -513,6 +585,7 @@ const player = {
   weapon: "ak",
   hp: PLAYER_MAX_HP,
   coins: 0,
+  potions: 0,
   damageMul: 1,
   damageTime: 0,
   spread: false,
@@ -525,6 +598,8 @@ const player = {
 const bullets = [];
 const pickups = [];
 const keys = {};
+let toast = "";
+let toastTime = 0;
 let fireCooldown = 0;
 let animTime = 0;
 let wasMoving = false;
@@ -583,6 +658,12 @@ window.addEventListener("keydown", (event) => {
   }
   if (event.key.toLowerCase() === "e" && !event.repeat && !dead) {
     player.shield = !player.shield;
+  }
+  if (event.key.toLowerCase() === "f" && !event.repeat && !dead) {
+    buyPotion();
+  }
+  if (event.key.toLowerCase() === "q" && !event.repeat && !dead) {
+    drinkPotion();
   }
   if (event.key === "Shift") keys.shift = true;
   if (!dead && !event.repeat) {
@@ -730,6 +811,49 @@ function applyPickup(kind) {
   } else if (kind === "dash") {
     player.dash = true;
   }
+}
+
+function say(msg) {
+  toast = msg;
+  toastTime = 1.6;
+}
+
+function nearVending() {
+  const { tx, ty } = worldToTile(player.x, player.y);
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (getTile(tx + dx, ty + dy) === VENDING) return true;
+    }
+  }
+  return false;
+}
+
+function buyPotion() {
+  if (!nearVending()) {
+    say("WALK UP TO A VENDING MACHINE");
+    return;
+  }
+  if (player.coins < VEND_COST) {
+    say("NEED " + VEND_COST + " COINS");
+    return;
+  }
+  player.coins -= VEND_COST;
+  player.potions += 1;
+  say("POTION +1  (Q to drink)");
+}
+
+function drinkPotion() {
+  if (player.potions <= 0) {
+    say("NO POTIONS");
+    return;
+  }
+  if (player.hp >= PLAYER_MAX_HP) {
+    say("ALREADY FULL HP");
+    return;
+  }
+  player.potions -= 1;
+  player.hp = Math.min(PLAYER_MAX_HP, player.hp + POTION_HEAL);
+  say("GLUG  +" + POTION_HEAL + " HP");
 }
 
 function drawBark(enemy) {
@@ -960,6 +1084,10 @@ function shieldBlocks(bullet) {
 }
 
 function update(dt) {
+  if (toastTime > 0) {
+    toastTime -= dt;
+    if (toastTime <= 0) toast = "";
+  }
   if (dead) return;
 
   if (fireCooldown > 0) fireCooldown -= dt;
@@ -1165,8 +1293,8 @@ function draw() {
   const gunName = player.weapon === "ak" ? "AK-47" : "PISTOL";
   ctx.fillText(
     player.shield
-      ? "WASD  |  SPACE  |  1 AK  2 pistol  |  E shield (UP)  |  " + gunName
-      : "WASD  |  SPACE  |  1 AK  2 pistol  |  E shield  |  " + gunName,
+      ? "WASD  |  SPACE  |  1 AK  2 pistol  |  E shield (UP)  |  F vend  Q drink  |  " + gunName
+      : "WASD  |  SPACE  |  1 AK  2 pistol  |  E shield  |  F vend  Q drink  |  " + gunName,
     16,
     28
   );
@@ -1182,10 +1310,21 @@ function draw() {
       alive +
       "  |  COINS " +
       player.coins +
+      "  |  POTIONS " +
+      player.potions +
       (buffs.length ? "  |  " + buffs.join(" ") : ""),
     16,
     50
   );
+
+  if (nearVending() && !dead) {
+    ctx.fillStyle = "#F5C518";
+    ctx.fillText("F  buy healing potion  (" + VEND_COST + " coins)", 16, 72);
+  }
+  if (toast) {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(toast, 16, nearVending() && !dead ? 94 : 72);
+  }
 
   if (dead) {
     ctx.fillStyle = "rgba(0,0,0,0.45)";
