@@ -1,0 +1,10 @@
+{
+  "name": "trumpmustdie",
+  "private": true,
+  "scripts": {
+    "start": "serve src -l 3000"
+  },
+  "devDependencies": {
+    "serve": "^14.2.4"
+  }
+}
